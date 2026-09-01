@@ -1,6 +1,6 @@
 {
   "name": "@kohanyirobert/node-red-python-function",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Write Node-RED Function nodes in Python, with working flow/global context. Fork of node-red-contrib-python-function.",
   "keywords": [
     "node-red",
