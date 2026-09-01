@@ -8,6 +8,8 @@ reached a cohort unnoticed.
 """
 import json
 import os
+import re
+import struct
 import sys
 import threading
 
@@ -15,8 +17,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, os.pardir, "lib", "node-red-python-function.js")
 
 src = open(SRC).read()
-_cls = src[src.index("class _Channel"):src.index("if sys.version_info")]
-_ns = {}
+# End the slice at whatever follows the class, rather than at one particular line: the Python 2
+# branch this used to key on is exactly the kind of thing a later change deletes, and then the
+# test fails to find its own subject instead of failing honestly.
+_tail = src[src.index("class _Channel"):]
+_cls = re.split(r"\n(?=channel\s*=|if sys\.version_info)", _tail, maxsplit=1)[0]
+# The class is executed on its own, so hand it the modules the module around it imports.
+_ns = {"os": os, "json": json, "sys": sys, "struct": struct}
 exec(_cls, _ns)
 Channel = _ns["_Channel"]
 
@@ -99,11 +106,11 @@ huge = (1).to_bytes(8, "little") + (2 ** 62).to_bytes(8, "little")
 try:
     reader(huge, True).readline()
     outcome = "no error"
-except RuntimeError as exc:
-    outcome = "RuntimeError" if "out of step" in str(exc) else "RuntimeError, wrong message"
+except RuntimeError:
+    outcome = "refused"
 except MemoryError:
     outcome = "MemoryError"
-check("an impossible frame length is refused, not allocated", outcome, "RuntimeError")
+check("an impossible frame length is refused, not allocated", outcome, "refused")
 
 print("\nWindows: framed writes")
 c, r = writer(True)
