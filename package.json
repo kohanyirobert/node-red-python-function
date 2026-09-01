@@ -31,6 +31,9 @@
     "README.md",
     "LICENSE"
   ],
+  "scripts": {
+    "test": "node test/e2e_test.js && python3 test/channel_test.py"
+  },
   "node-red": {
     "nodes": {
       "node-red-python-function": "lib/node-red-python-function.js"

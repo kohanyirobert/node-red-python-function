@@ -86,6 +86,27 @@ Node-RED 4.x · Node 24.14.1 · Python 3.14.7.
 | `flow.get` / `flow.set` | **NameError** | **works** | works |
 | `global` scope | **NameError** | **works** as `global_ctx` | works |
 
+## Tests
+
+```bash
+npm test
+```
+
+Two of them, and **both have to be run on Windows as well as on a POSIX box** — that is the
+point of them:
+
+| | |
+|---|---|
+| `test/e2e_test.js` | drives the node against a stub Node-RED, with no Node-RED installed: a message in, `node.log` and the returned `msg` out, and a `flow.set` / `flow.get` round trip, which is where Python blocks waiting for an answer. It exercises the real spawn options and both directions of the IPC channel |
+| `test/channel_test.py` | the framing itself, read out of `lib/` rather than copied so it cannot drift. It forces the framed and unframed paths on, so a POSIX machine can test the Windows one — including a captured Windows frame, a payload whose length puts a newline inside the header, a frame split across reads, two frames in one write, and an impossible length |
+
+Node's `ipc` channel frames every message on Windows and does not on POSIX, so a change here
+passing on one platform says nothing about the other. That asymmetry is what let a crash on
+every single message ship: `UnicodeDecodeError: 'utf-32-le' codec can't decode bytes`, on the
+first message a node received, before the user's function ran.
+
+`npm test` runs `python3`, which is what the node itself spawns (see §3 above).
+
 ## Licence
 
 MIT, as upstream. Original copyright Arnau Orriols.
