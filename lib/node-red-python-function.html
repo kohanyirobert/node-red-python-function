@@ -21,53 +21,64 @@
             $( "#node-input-outputs" ).spinner({
                 min:1
             });
-            var langTools = ace.require('ace/ext/language_tools');
-            this.editor = ace.edit('node-input-func-editor');
-            this.editor.getSession().setMode('ace/mode/python');
-            this.editor.setValue($("#node-input-func").val(), -1);
-            this.editor.setOptions({
-                    enableBasicAutocompletion: true,
-                    enableLiveAutocompletion: true,
-                    highlightSelectedWord: true,
-                    useSoftTabs: true,
-                    tabSize: 4,
+            // Ask Node-RED for an editor instead of calling the `ace` global. Upstream did
+            // `ace.edit(...)` directly, which only worked because Node-RED used to load ACE on
+            // every page. Node-RED 5 loads just the library settings.js selects — Monaco by
+            // default — so there `ace` is undefined, oneditprepare threw, and the dialog opened
+            // with an empty box where the code should be. createEditor returns whichever editor
+            // the runtime has (Monaco, ACE or the basic textarea) behind one interface, and it
+            // has been there since Node-RED 0.x. Node-RED maps 'ace/mode/python' to Monaco's
+            // Python itself.
+            this.editor = RED.editor.createEditor({
+                id: 'node-input-func-editor',
+                mode: 'ace/mode/python',
+                value: $("#node-input-func").val(),
+                focus: true
             });
-            var noderedKeywords = [
-                'msg', 'msg.payload', 'node', 'node.send',
-                'node.log', 'node.warn', 'node.error', 'node.status'
-            ];
-            this.editor.completers.push({
-                getCompletions: function (state, session, pos, prefix, callback) {
-                    callback(null, noderedKeywords.map(function (word) {
-                        return {
-                            name: word,
-                            value: word,
-                            score: 0,
-                            meta: 'Node-RED'
-                        };
-                    }));
-                }
-            });
-            this.editor.focus();
+            // ACE only: offer the Node-RED names as completions. Monaco has no `completers`
+            // and its word-based suggestions cover the same ground.
+            if (this.editor.completers) {
+                var noderedKeywords = [
+                    'msg', 'msg.payload', 'node', 'node.send',
+                    'node.log', 'node.warn', 'node.error', 'node.status'
+                ];
+                this.editor.completers.push({
+                    getCompletions: function (state, session, pos, prefix, callback) {
+                        callback(null, noderedKeywords.map(function (word) {
+                            return {
+                                name: word,
+                                value: word,
+                                score: 0,
+                                meta: 'Node-RED'
+                            };
+                        }));
+                    }
+                });
+            }
         },
         oneditsave: function() {
             var annot = this.editor.getSession().getAnnotations();
             this.noerr = 0;
             $("#node-input-noerr").val(0);
             for (var k=0; k < annot.length; k++) {
-                //console.log(annot[k].type,":",annot[k].text, "on line", annot[k].row);
                 if (annot[k].type === "error") {
                     $("#node-input-noerr").val(annot.length);
                     this.noerr = annot.length;
                 }
             }
             $("#node-input-func").val(this.editor.getValue());
+            this.editor.destroy();
+            delete this.editor;
+        },
+        oneditcancel: function() {
+            this.editor.destroy();
             delete this.editor;
         },
         oneditresize: function(size) {
             var rows = $("#dialog-form>div:not(.node-text-editor-row)");
             var height = $("#dialog-form").height();
-            for (var i=0;i<rows.size();i++) {
+            // jQuery 3 removed .size(); Node-RED has shipped jQuery 3 since 1.x.
+            for (var i=0;i<rows.length;i++) {
                 height -= $(rows[i]).outerHeight(true);
             }
             var editorRow = $("#dialog-form>div.node-text-editor-row");

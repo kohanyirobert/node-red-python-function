@@ -53,8 +53,9 @@ const USER_FUNC = [
 
 Ctor.call(node, {name: 'test', func: USER_FUNC});
 
-// The node spawns 'python3' unconditionally. Surface that clearly rather than as a timeout:
-// a python.org install on Windows provides python.exe and py, but no python3.
+// A spawn failure surfaces clearly rather than as a timeout. The node resolves its interpreter
+// now (python3, then python, then `py -3` on Windows), so this should not fire; if it does, the
+// message says which command failed rather than leaving a 15-second silence.
 node.child.on('error', function (err) {
   seen.spawnError = err.code || err.message;
   finish();
@@ -73,10 +74,10 @@ function finish() {
   clearTimeout(timer);
   try { node.child.kill(); } catch (e) { /* already gone */ }
 
-  if (seen.spawnError === 'ENOENT') {
-    console.log("  SKIP  no 'python3' on PATH — the node hardcodes it (lib/…:57).");
-    console.log('        Windows: a python.org install gives python.exe and py, not python3.');
-    process.exit(2);
+  if (seen.spawnError) {
+    console.log(`  FAIL  the interpreter could not be spawned: ${seen.spawnError}`);
+    console.log('        Install Python 3, or set NODE_RED_PYTHON to the full path of one.');
+    process.exit(1);
   }
 
   check('Python logged back through the channel', seen.log, 'python is running');
