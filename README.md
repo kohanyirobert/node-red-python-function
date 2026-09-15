@@ -82,6 +82,29 @@ whichever one the runtime has (Monaco, ACE or the plain textarea) behind one int
 been available since Node-RED 0.x. Node-RED maps `ace/mode/python` to Monaco's Python itself.
 A `.size()` call left over from jQuery 2 went at the same time.
 
+### 5 · A failure in Python reaches the Catch node
+
+Node-RED's contract for a catchable failure is not "call `node.error`" — it is
+`node.error(err, msg)`. **Only the second argument makes a Catch node fire**; a one-argument
+call writes to the debug sidebar and stops there. The node forwarded Python's `node.error(...)`
+with the text alone, so no flow could react to it.
+
+An uncaught exception was worse. Nothing wrapped the author's function, so a `raise` escaped the
+dispatch loop and **ended the interpreter**: the flow saw a dead process rather than a failed
+message, every module-level variable went with it, and the only trace was
+`Python Function process exited with code 1` — itself uncatchable.
+
+Both now report as ordinary Node-RED errors, carrying the message they belong to:
+
+```python
+raise ValueError('kaboom')   # caught, reported with the traceback, interpreter stays up
+node.error('boom')           # caught, with msg attached
+```
+
+The message that entered the node is held until Python answers for it, which is how the error
+gets tied back to it. An error raised outside any message's turn — during import, say — has no
+message to carry and so is logged only, as before.
+
 ## Unchanged from upstream
 
 Multiple outputs, `node.send` / `log` / `warn` / `error` / `status`, and the restoration of the live
