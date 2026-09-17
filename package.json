@@ -1,6 +1,6 @@
 {
   "name": "@kohanyirobert/node-red-python-function",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Write Node-RED Function nodes in Python, with working flow/global context. Fork of node-red-contrib-python-function.",
   "keywords": [
     "node-red",
@@ -10,7 +10,7 @@
     "flow context",
     "global context"
   ],
-  "author": "Kohányi Róbert",
+  "author": "Koh\u00e1nyi R\u00f3bert",
   "contributors": [
     "Arnau Orriols (original node-red-contrib-python-function)"
   ],
@@ -32,7 +32,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/e2e_test.js && node test/interpreter_test.js && python3 test/channel_test.py"
+    "test": "node test/e2e_test.js && node test/catch_test.js && node test/interpreter_test.js && python3 test/channel_test.py"
   },
   "node-red": {
     "nodes": {

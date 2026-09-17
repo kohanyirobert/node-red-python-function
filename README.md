@@ -7,8 +7,8 @@ Write Node-RED **Function** nodes in Python — with `flow` and `global` context
 A fork of [`node-red-contrib-python-function`](https://github.com/arnauorriols/node-red-contrib-python-function)
 0.0.5 by Arnau Orriols (MIT), which has had no upstream activity since 2020.
 
-We picked it for a beginners' course, verified it properly, and hit three bugs. This is that
-package with the three fixed.
+We picked it for a beginners' course, verified it properly, and kept hitting bugs. This is that
+package with five of them fixed.
 
 ## What is different
 
@@ -82,6 +82,40 @@ whichever one the runtime has (Monaco, ACE or the plain textarea) behind one int
 been available since Node-RED 0.x. Node-RED maps `ace/mode/python` to Monaco's Python itself.
 A `.size()` call left over from jQuery 2 went at the same time.
 
+### 5 · A raise reaches the Catch node, like a throw does
+
+The built-in Function node has three rules, and this node now follows all three rather than
+inventing its own:
+
+| in the node | Catch node |
+|---|---|
+| `node.error("text")` | does **not** fire — debug sidebar only |
+| `node.error("text", msg)` | fires; the message rode along |
+| `raise` / `throw` | fires; the runtime attaches the message for you |
+
+The first two lines always worked here. The third did not. Nothing wrapped the author's function,
+so a `raise` escaped the dispatch loop and **ended the interpreter**: the flow saw a dead process
+rather than a failed message, every module-level variable went with it, and the only trace was
+`Python Function process exited with code 1` — itself uncatchable. A `KeyError` on a malformed API
+response did the same, which is how most people met it.
+
+Now an escaped exception is reported on its own channel, carrying the message it belongs to:
+
+```python
+raise ValueError('kaboom')   # caught, with the traceback; the interpreter stays up
+msg['payload'].get('nope')   # same, for an error nobody wrote on purpose
+node.error('boom')           # logged only — exactly as in the built-in node
+node.error('boom', msg)      # caught
+```
+
+The message that entered the node is held until Python answers for it, which is how the traceback
+gets tied back to it. An exception raised outside any message's turn — during import, say — has no
+message to carry and so is logged only.
+
+**`node.error` deliberately did not change.** Making a one-argument call catchable would be more
+convenient and would stop this behaving like the node it is modelled on, so the convenience was
+left out.
+
 ## Unchanged from upstream
 
 Multiple outputs, `node.send` / `log` / `warn` / `error` / `status`, and the restoration of the live
@@ -126,7 +160,7 @@ which is the path that blocks waiting on the IPC channel.
 npm test
 ```
 
-Three of them, and **all have to be run on Windows as well as on a POSIX box** — that is the
+Four of them, and **all have to be run on Windows as well as on a POSIX box** — that is the
 point of them:
 
 | | |
