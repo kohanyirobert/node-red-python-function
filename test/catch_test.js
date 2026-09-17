@@ -1,19 +1,20 @@
 'use strict';
-/* Can a Catch node see a failure that happened inside Python?
+/* Does a failure in Python reach a Catch node — and does it do so the same way the built-in
+ * Function node does?
  *
- * Node-RED's contract is not "call node.error". It is `node.error(err, msg)` — the Catch node
- * only fires when the MESSAGE OBJECT is passed as the second argument. One-argument
- * node.error() writes to the debug sidebar and nothing else, so a flow cannot react to it.
+ * The built-in node's rules, which this node copies rather than improves on:
  *
- * Both ways Python can fail are checked here:
- *   A. the author calls node.error(...) deliberately
- *   B. the author's code raises, and nobody caught it
+ *   node.error("text")        → debug sidebar only. NOT catchable.
+ *   node.error("text", msg)   → catchable, because the message rode along.
+ *   throw / raise             → catchable. The runtime attaches the message on the author's
+ *                               behalf, and the node survives to handle the next message.
  *
- * Before the fix A arrives with no msg (uncatchable) and B kills the interpreter outright.
+ * The third line is the one this node used to get wrong: an escaped exception ended the
+ * interpreter instead, so nothing was catchable and every module-level variable was lost.
  */
 const assert = require('assert');
 
-const TIMEOUT_MS = 20000;
+const TIMEOUT_MS = 25000;
 
 let Ctor = null;
 require('../lib/node-red-python-function.js')({
@@ -33,16 +34,12 @@ const results = [];
 function check(name, got, want) {
   const ok = got === want;
   results.push(ok);
-  if (ok) {
-    console.log(`  PASS  ${name}`);
-  } else {
-    console.log(`  FAIL  ${name}\n          got  ${JSON.stringify(got)}` +
-                `\n          want ${JSON.stringify(want)}`);
-  }
+  console.log(ok ? `  PASS  ${name}`
+                 : `  FAIL  ${name}\n          got  ${JSON.stringify(got)}` +
+                   `\n          want ${JSON.stringify(want)}`);
 }
 
-/* Build a node instance wired to a stub runtime. `onSettle` fires once the scenario has had
- * its say — either Python sent something back, or it errored, or we ran out of patience. */
+/* Run one scenario against a stub runtime and settle once Python has had its say. */
 function scenario(func, onSettle) {
   const seen = {errors: [], sent: null, exited: false};
   const node = {
@@ -50,7 +47,7 @@ function scenario(func, onSettle) {
     on: function (event, fn) { this.handlers[event] = fn; },
     log: function () {},
     warn: function () {},
-    /* The whole point: record BOTH arguments, because the second one is the contract. */
+    /* Both arguments are recorded, because the second one is the whole contract. */
     error: function (err, msg) {
       const text = String(err).trim();
       if (/exited with code/.test(text)) seen.exited = true;
@@ -63,18 +60,16 @@ function scenario(func, onSettle) {
 
   Ctor.call(node, {name: 'catch-test', func: func});
 
-  /* Give Python time to start, fail, and be heard. There is no single event that means
-   * "the scenario is over", so settle on a timer and inspect whatever arrived. */
   const timer = setTimeout(function () {
     try { node.child.kill(); } catch (e) { /* already gone */ }
     onSettle(seen);
-  }, 4000);
+  }, 4500);
   timer.unref && timer.unref();
 
   node.handlers.input({payload: 'hello', _msgid: 'test-1'});
 }
 
-/* A failure is catchable exactly when a msg object rode along with it. */
+/* A failure is catchable exactly when a message object rode along with it. */
 function catchable(errors) {
   return errors.filter((e) => e.msg && typeof e.msg === 'object');
 }
@@ -84,26 +79,41 @@ const hardStop = setTimeout(function () {
   process.exit(1);
 }, TIMEOUT_MS);
 
-console.log('\nA. node.error() called deliberately from Python');
+function done() {
+  clearTimeout(hardStop);
+  const failed = results.filter((r) => !r).length;
+  console.log(`\n${results.length - failed} passed, ${failed} failed`);
+  process.exit(failed ? 1 : 0);
+}
+
+console.log('\nA. node.error("text") — one argument, like the built-in node: NOT catchable');
 scenario("node.error('boom')\nreturn msg", function (a) {
-  const caught = catchable(a.errors);
-  check('the error reached the runtime at all', a.errors.length > 0, true);
-  check('it carried the msg, so a Catch node fires', caught.length > 0, true);
-  check('and the msg is the one that went in', caught.length > 0 && caught[0].msg._msgid,
-        'test-1');
+  check('the error was reported', a.errors.length > 0, true);
+  check('but no msg rode along, so no Catch node fires', catchable(a.errors).length, 0);
 
-  console.log('\nB. an uncaught Python exception');
-  scenario("raise ValueError('kaboom')", function (b) {
+  console.log('\nB. node.error("text", msg) — two arguments: catchable');
+  scenario("node.error('boom', msg)\nreturn msg", function (b) {
     const caught = catchable(b.errors);
-    check('the exception was reported', b.errors.length > 0, true);
     check('it carried the msg, so a Catch node fires', caught.length > 0, true);
-    check('the traceback names the exception',
-          b.errors.some((e) => /kaboom/.test(e.text)), true);
-    check('the interpreter stayed up instead of dying', b.exited, false);
+    check('and the msg is the one that went in',
+          caught.length > 0 && caught[0].msg._msgid, 'test-1');
 
-    clearTimeout(hardStop);
-    const failed = results.filter((r) => !r).length;
-    console.log(`\n${results.length - failed} passed, ${failed} failed`);
-    process.exit(failed ? 1 : 0);
+    console.log('\nC. an uncaught exception — catchable, like a thrown error in JavaScript');
+    scenario("raise ValueError('kaboom')", function (c) {
+      const caught = catchable(c.errors);
+      check('it carried the msg, so a Catch node fires', caught.length > 0, true);
+      check('the traceback names the exception',
+            c.errors.some((e) => /kaboom/.test(e.text)), true);
+      check('the interpreter stayed up instead of dying', c.exited, false);
+
+      console.log('\nD. bad data, not an explicit raise — same treatment');
+      scenario("msg['payload'].get('nope')\nreturn msg", function (d) {
+        check('it carried the msg, so a Catch node fires', catchable(d.errors).length > 0, true);
+        check('the traceback names the exception',
+              d.errors.some((e) => /AttributeError/.test(e.text)), true);
+        check('the interpreter stayed up', d.exited, false);
+        done();
+      });
+    });
   });
 });
