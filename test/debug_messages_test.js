@@ -9,7 +9,8 @@
  * A raise inside the function no longer goes through stderr (it is reported over the channel so
  * a Catch node can take it), but anything that fails outside it still does — such as a return
  * value that cannot be turned into JSON, which kills the interpreter. That is the case driven
- * here, alongside the plain raise and a function that merely writes to stderr and carries on.
+ * here, alongside the plain raise, a function that merely writes to stderr and carries on, one
+ * that writes to stderr without pause, and code that cannot even load.
  */
 const assert = require('assert');
 
@@ -73,6 +74,33 @@ function scenario(func, onSettle) {
   node.handlers.input({payload: 'hello', _msgid: 'test-1'});
 }
 
+/* A function that writes to stderr on every message, fed a message every 100 ms for 2.5 s. With
+ * nothing but a quiet period, none of that would be reported until the messages stopped. */
+function streaming(onSettle) {
+  const result = {firstAfterMs: Infinity, reports: 0};
+  let started = 0;
+  const node = {
+    handlers: {},
+    on: function (event, fn) { this.handlers[event] = fn; },
+    log: function () {}, warn: function () {}, status: function () {}, send: function () {},
+    error: function () {
+      if (result.reports++ === 0) result.firstAfterMs = Date.now() - started;
+    },
+    context: function () { return {flow: contextStore(), global: contextStore()}; },
+  };
+  Ctor.call(node, {name: 'stream-test', func: "import sys\nsys.stderr.write('tick\\n')\nreturn msg"});
+  let n = 0;
+  const feed = setInterval(function () {
+    if (!started) started = Date.now();
+    node.handlers.input({payload: n, _msgid: `stream-${n++}`});
+    if (n === 25) {
+      clearInterval(feed);
+      node.handlers.close();
+      onSettle(result);
+    }
+  }, 100);
+}
+
 const hardStop = setTimeout(function () {
   console.log('  FAIL  the scenarios never settled');
   process.exit(1);
@@ -105,13 +133,29 @@ scenario("return {'payload': {1, 2}}", function (a) {
           b.errors.length > 0 && b.errors[0].msg && b.errors[0].msg._msgid, 'test-1');
 
     console.log('\nC. writing to stderr without failing — reported once, and the msg goes on');
-    scenario("import sys\nsys.stderr.write('first line\\n')\nsys.stderr.write('second line\\n')\n" +
-             'return msg', function (c) {
+    /* The pause makes the two writes two separate chunks, which used to be two entries. */
+    scenario("import sys, time\nsys.stderr.write('first line\\n')\ntime.sleep(0.05)\n" +
+             "sys.stderr.write('second line\\n')\nreturn msg", function (c) {
       check('the msg was sent', c.sent && c.sent._msgid, 'test-1');
       check('exactly one error was reported', c.errors.length, 1);
       check('holding both lines', c.errors.length > 0 && c.errors[0].text,
             'first line\nsecond line');
-      done();
+
+      console.log('\nD. stderr that never goes quiet — still reported, within a bounded wait');
+      streaming(function (d) {
+        check('the first report came within 1.5 s of the first write', d.firstAfterMs < 1500, true);
+        check('and more followed, rather than one at the very end', d.reports >= 2, true);
+
+        console.log('\nE. code that cannot load — one entry, not one per respawn');
+        scenario('x = = 1\nreturn msg', function (e) {
+          check('exactly one error was reported', e.errors.length, 1);
+          const text = e.errors.length ? e.errors[0].text : '';
+          check('it holds the SyntaxError', /SyntaxError/.test(text), true);
+          check('and the exit code', /exited with code 1/.test(text), true);
+          check('and says to fix it', /Fix it and deploy again/.test(text), true);
+          done();
+        });
+      });
     });
   });
 });
