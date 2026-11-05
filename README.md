@@ -116,6 +116,15 @@ message to carry and so is logged only.
 convenient and would stop this behaving like the node it is modelled on, so the convenience was
 left out.
 
+### 6 · One failure, one entry in the debug sidebar
+
+Whatever Python wrote to stderr went to the sidebar one pipe chunk at a time, so a single traceback
+arrived as several entries — typically `Traceback (most recent call last):`, then the rest of it,
+then `Python Function process exited with code 1` on its own. stderr is now collected until it goes
+quiet, and when the interpreter dies, the exit code is reported in the same entry as the traceback
+that killed it. A `raise` inside the function was already a single entry after §5; this covers
+everything that still fails outside it, such as returning something JSON cannot hold.
+
 ## Unchanged from upstream
 
 Multiple outputs, `node.send` / `log` / `warn` / `error` / `status`, and the restoration of the live
@@ -160,12 +169,14 @@ which is the path that blocks waiting on the IPC channel.
 npm test
 ```
 
-Four of them, and **all have to be run on Windows as well as on a POSIX box** — that is the
+Five of them, and **all have to be run on Windows as well as on a POSIX box** — that is the
 point of them:
 
 | | |
 |---|---|
 | `test/e2e_test.js` | drives the node against a stub Node-RED, with no Node-RED installed: a message in, `node.log` and the returned `msg` out, and a `flow.set` / `flow.get` round trip, which is where Python blocks waiting for an answer. It exercises the real spawn options and both directions of the IPC channel |
+| `test/catch_test.js` | which failures reach a Catch node: `node.error` with and without `msg`, a `raise`, and an error nobody raised on purpose — and that the interpreter survives the last two |
+| `test/debug_messages_test.js` | one failure is one entry in the debug sidebar: a crash outside the function (traceback and exit code together), a `raise`, and a function that only writes to stderr |
 | `test/interpreter_test.js` | the interpreter lookup, and the two paths that used to throw when there was no interpreter — a message arriving and the flow stopping. Platform-independent, so a POSIX machine tests the Windows failure mode |
 | `test/channel_test.py` | the framing itself, read out of `lib/` rather than copied so it cannot drift. It forces the framed and unframed paths on, so a POSIX machine can test the Windows one — including a captured Windows frame, a payload whose length puts a newline inside the header, a frame split across reads, two frames in one write, and an impossible length |
 
