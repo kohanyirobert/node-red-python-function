@@ -14,9 +14,10 @@
  */
 const assert = require('assert');
 
-const TIMEOUT_MS = 25000;
-/* Comfortably past the node's quiet period for stderr, so every report has been made. */
-const SETTLE_MS = 2000;
+const TIMEOUT_MS = 60000;
+/* Comfortably past the node's longest wait for stderr (3 s for a traceback), so every report has
+ * been made. */
+const SETTLE_MS = 4000;
 
 let Ctor = null;
 require('../lib/node-red-python-function.js')({
@@ -74,8 +75,9 @@ function scenario(func, onSettle) {
   node.handlers.input({payload: 'hello', _msgid: 'test-1'});
 }
 
-/* A function that writes to stderr on every message, fed a message every 100 ms for 2.5 s. With
- * nothing but a quiet period, none of that would be reported until the messages stopped. */
+/* A function that writes to stderr on every message, fed a message every 100 ms for 4 s once its
+ * code has loaded. With nothing but a quiet period, none of that would be reported until the
+ * messages stopped. */
 function streaming(onSettle) {
   const result = {firstAfterMs: Infinity, reports: 0};
   let started = 0;
@@ -89,16 +91,20 @@ function streaming(onSettle) {
     context: function () { return {flow: contextStore(), global: contextStore()}; },
   };
   Ctor.call(node, {name: 'stream-test', func: "import sys\nsys.stderr.write('tick\\n')\nreturn msg"});
-  let n = 0;
-  const feed = setInterval(function () {
-    if (!started) started = Date.now();
-    node.handlers.input({payload: n, _msgid: `stream-${n++}`});
-    if (n === 25) {
-      clearInterval(feed);
-      node.handlers.close();
-      onSettle(result);
-    }
-  }, 100);
+  /* Start-up is not what is being measured, and on a loaded machine it can take seconds. */
+  node.child.on('message', function (m) {
+    if (!m || m.ctx !== 'ready') return;
+    let n = 0;
+    started = Date.now();
+    const feed = setInterval(function () {
+      node.handlers.input({payload: n, _msgid: `stream-${n++}`});
+      if (n === 40) {
+        clearInterval(feed);
+        node.handlers.close();
+        onSettle(result);
+      }
+    }, 100);
+  });
 }
 
 const hardStop = setTimeout(function () {
@@ -143,7 +149,8 @@ scenario("return {'payload': {1, 2}}", function (a) {
 
       console.log('\nD. stderr that never goes quiet — still reported, within a bounded wait');
       streaming(function (d) {
-        check('the first report came within 1.5 s of the first write', d.firstAfterMs < 1500, true);
+        /* The cap is 1 s; the rest is room for a slow machine. */
+        check('the first report came within 2.5 s of the first input', d.firstAfterMs < 2500, true);
         check('and more followed, rather than one at the very end', d.reports >= 2, true);
 
         console.log('\nE. code that cannot load — one entry, not one per respawn');

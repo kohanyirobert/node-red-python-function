@@ -126,10 +126,13 @@ returning something JSON cannot hold.
 
 - stderr is collected until it has been quiet for 200 ms, and reported as one entry. A function
   that writes to stderr without pause (`logging.warning` on every message, say) is still reported
-  at least once a second, and never more than 64 KB at a time. The flip side: stderr written close
+  at least once a second, and in pieces of about 64 KB at most. The flip side: stderr written close
   together — by two messages in quick succession, or just before a crash — shares an entry.
   Trailing whitespace is trimmed, so stderr that is only whitespace is not reported.
 - When the interpreter dies, the exit code goes in the same entry as the traceback that killed it.
+  stderr that looks like a traceback waits up to 2 s for that exit rather than 200 ms, so a slow
+  machine does not split them; the flip side is that a traceback a live function prints itself
+  (`traceback.print_exc()`) shows up up to 2 s late.
 - Code that cannot even load — a `SyntaxError`, an `IndentationError` — is no longer respawned ten
   times. Each respawn ran the same code and failed the same way, so the same traceback landed in
   the sidebar eleven times. Python now says when its code has loaded; a process that dies before
