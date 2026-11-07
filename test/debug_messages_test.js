@@ -6,11 +6,15 @@
  * Python exception showed up as three entries: "Traceback (most recent call last):", the rest
  * of the traceback, and then "Python Function process exited with code 1".
  *
- * A raise inside the function no longer goes through stderr (it is reported over the channel so
- * a Catch node can take it), but anything that fails outside it still does — such as a return
- * value that cannot be turned into JSON, which kills the interpreter. That is the case driven
- * here, alongside the plain raise, a function that merely writes to stderr and carries on, one
- * that writes to stderr without pause, and code that cannot even load.
+ * Python now describes every exception itself, and the entry is what the built-in Function node
+ * shows for a thrown error: one line, the exception and where in the author's code it happened
+ * (`KeyError: 'missing' (line 3)`). The traceback goes to the log and to the error's stack. It
+ * used to be the entry, and the sidebar keeps only the first 1000 characters of one, so a long
+ * traceback lost its last line — the one that says what went wrong.
+ *
+ * Driven here: a return value that cannot be turned into JSON, which kills the interpreter; a
+ * plain raise; a raise deep in a call stack; a function that merely writes to stderr and carries
+ * on, one that writes to stderr without pause; and code that cannot even load.
  */
 const assert = require('assert');
 
@@ -53,7 +57,7 @@ function scenario(func, onSettle) {
     log: function (text) { seen.logs.push(String(text)); },
     warn: function () {},
     error: function (err, msg) {
-      seen.errors.push({text: String(err), msg: msg});
+      seen.errors.push({text: String(err), msg: msg, stack: err && err.stack});
       arm();
     },
     status: function () {},
@@ -123,27 +127,24 @@ console.log('\nA. a failure outside the function, which ends the interpreter —
 scenario("return {'payload': {1, 2}}", function (a) {
   check('exactly one error was reported', a.errors.length, 1);
   const text = a.errors.length ? a.errors[0].text : '';
-  check('it holds the whole traceback, from the top',
-        /^Traceback \(most recent call last\):/.test(text), true);
-  check('down to the exception itself', /TypeError: .*not JSON serializable/.test(text), true);
-  check('and says the interpreter exited', /exited with code 1/.test(text), true);
-  /* The sidebar keeps the first 1000 characters; this traceback is longer than that, and its
-   * bottom lines are the ones a learner is told to read. */
-  check('it fits the debug sidebar', text.length <= 1000, true);
-  check('the bottom line survives: the report ends with the exit code',
-        /\n\nPython Function process exited with code 1$/.test(text), true);
-  check('the uncut traceback went to the log',
-        a.logs.some((l) => /^Traceback/.test(l) && /TypeError/.test(l) && l.length > 1000), true);
+  /* The traceback for this one runs past 1000 characters, the most the sidebar shows. */
+  check('the entry is the exception, the data it failed on, and the exit — nothing else', text,
+        "TypeError: Object of type set is not JSON serializable\n" +
+        "when serializing dict item 'payload'\n\nPython Function process exited with code 1");
+  check('the whole traceback went to the log',
+        a.logs.some((l) => /^Traceback/.test(l) && /TypeError/.test(l)), true);
   check('nothing to catch: no msg rode along, as before',
         a.errors.length > 0 && a.errors[0].msg, undefined);
 
   console.log('\nB. a raise in the function — one entry, and still catchable');
   scenario("raise ValueError('kaboom')", function (b) {
     check('exactly one error was reported', b.errors.length, 1);
-    check('it names the exception',
-          b.errors.length > 0 && /ValueError: kaboom/.test(b.errors[0].text), true);
+    check('it is the exception and its line',
+          b.errors.length > 0 && b.errors[0].text, 'ValueError: kaboom (line 1)');
     check('it carried the msg, so a Catch node fires',
           b.errors.length > 0 && b.errors[0].msg && b.errors[0].msg._msgid, 'test-1');
+    check('and the traceback rides along as its stack, for the Catch node',
+          b.errors.length > 0 && /^Traceback[^]*ValueError: kaboom$/.test(b.errors[0].stack), true);
 
     console.log('\nC. writing to stderr without failing — reported once, and the msg goes on');
     /* The pause makes the two writes two separate chunks, which used to be two entries. */
@@ -163,27 +164,29 @@ scenario("return {'payload': {1, 2}}", function (a) {
         console.log('\nE. code that cannot load — one entry, not one per respawn');
         scenario('x = = 1\nreturn msg', function (e) {
           check('exactly one error was reported', e.errors.length, 1);
-          const text = e.errors.length ? e.errors[0].text : '';
-          check('it holds the SyntaxError', /SyntaxError/.test(text), true);
-          check('and the exit code', /exited with code 1/.test(text), true);
-          check('and says to fix it', /Fix it and deploy again/.test(text), true);
+          check('it is the SyntaxError, where it is, the exit, and what to do',
+                e.errors.length > 0 && e.errors[0].text,
+                'SyntaxError: invalid syntax (line 1, col 5)\n\n' +
+                "Python Function process exited with code 1\n\n" +
+                "Function 'debug-test' could not start. Fix it and deploy again");
 
-          console.log('\nF. a raise from deep in a call stack — one entry, bottom line kept');
+          console.log('\nF. a raise from deep in a call stack — one short entry, own line numbers');
           /* Two functions in turn: Python folds a frame repeated in a row into one
-           * "[Previous line repeated ...]" line, which would keep this short. */
+           * "[Previous line repeated ...]" line, which would keep the traceback short. */
           scenario('def down(n):\n    if n == 0:\n        raise KeyError("missing")\n' +
                    '    return across(n - 1)\ndef across(n):\n    return down(n)\n' +
                    'return down(40)', function (f) {
             check('exactly one error was reported', f.errors.length, 1);
-            const text = f.errors.length ? f.errors[0].text : '';
-            check('it fits the debug sidebar', text.length <= 1000, true);
-            check('it still starts at the top',
-                  /^Traceback \(most recent call last\):/.test(text), true);
-            check('and ends with the exception', /\nKeyError: 'missing'$/.test(text), true);
+            check('it is the exception and the line in the editor that raised it',
+                  f.errors.length > 0 && f.errors[0].text, "KeyError: 'missing' (line 3)");
             check('it carried the msg, so a Catch node fires',
                   f.errors.length > 0 && f.errors[0].msg && f.errors[0].msg._msgid, 'test-1');
+            const stack = f.errors.length ? String(f.errors[0].stack) : '';
+            check('the stack names the author\'s lines, not the wrapper script\'s',
+                  /File "Function node", line 3, in down\n {4}raise KeyError/.test(stack) &&
+                  !/File "<string>"/.test(stack), true);
 
-            console.log('\nG. FORCE_COLOR in the environment — no escape codes in the entry');
+            console.log('\nG. FORCE_COLOR in the environment — no escape codes anywhere');
             /* NO_COLOR wins over FORCE_COLOR, so a shell that sets it would hide the bug. */
             const noColor = process.env.NO_COLOR;
             delete process.env.NO_COLOR;
@@ -192,8 +195,12 @@ scenario("return {'payload': {1, 2}}", function (a) {
               delete process.env.FORCE_COLOR;
               if (noColor !== undefined) process.env.NO_COLOR = noColor;
               const text = g.errors.length ? g.errors[0].text : '';
-              check('it holds the IndentationError', /IndentationError/.test(text), true);
-              check('without ANSI escape codes', /\u001b\[/.test(text), false);
+              check('it is the IndentationError, at line 2 of the code',
+                    text.split('\n')[0],
+                    "IndentationError: expected an indented block after 'if' statement on line 1" +
+                    ' (line 2, col 1)');
+              check('without ANSI escape codes, in the entry or the log',
+                    /\u001b\[/.test(text + g.logs.join('')), false);
               done();
             });
           });
