@@ -45,12 +45,12 @@ function check(name, got, want) {
 /* Run one scenario and settle once the first error (or the send) has had time to be followed by
  * any stragglers. Each node.error() call is one sidebar entry, so they are what gets counted. */
 function scenario(func, onSettle) {
-  const seen = {errors: [], sent: null};
+  const seen = {errors: [], sent: null, logs: []};
   let timer = null;
   const node = {
     handlers: {},
     on: function (event, fn) { this.handlers[event] = fn; },
-    log: function () {},
+    log: function (text) { seen.logs.push(String(text)); },
     warn: function () {},
     error: function (err, msg) {
       seen.errors.push({text: String(err), msg: msg});
@@ -127,6 +127,13 @@ scenario("return {'payload': {1, 2}}", function (a) {
         /^Traceback \(most recent call last\):/.test(text), true);
   check('down to the exception itself', /TypeError: .*not JSON serializable/.test(text), true);
   check('and says the interpreter exited', /exited with code 1/.test(text), true);
+  /* The sidebar keeps the first 1000 characters; this traceback is longer than that, and its
+   * bottom lines are the ones a learner is told to read. */
+  check('it fits the debug sidebar', text.length <= 1000, true);
+  check('the bottom line survives: the report ends with the exit code',
+        /\n\nPython Function process exited with code 1$/.test(text), true);
+  check('the uncut traceback went to the log',
+        a.logs.some((l) => /^Traceback/.test(l) && /TypeError/.test(l) && l.length > 1000), true);
   check('nothing to catch: no msg rode along, as before',
         a.errors.length > 0 && a.errors[0].msg, undefined);
 
@@ -160,7 +167,36 @@ scenario("return {'payload': {1, 2}}", function (a) {
           check('it holds the SyntaxError', /SyntaxError/.test(text), true);
           check('and the exit code', /exited with code 1/.test(text), true);
           check('and says to fix it', /Fix it and deploy again/.test(text), true);
-          done();
+
+          console.log('\nF. a raise from deep in a call stack — one entry, bottom line kept');
+          /* Two functions in turn: Python folds a frame repeated in a row into one
+           * "[Previous line repeated ...]" line, which would keep this short. */
+          scenario('def down(n):\n    if n == 0:\n        raise KeyError("missing")\n' +
+                   '    return across(n - 1)\ndef across(n):\n    return down(n)\n' +
+                   'return down(40)', function (f) {
+            check('exactly one error was reported', f.errors.length, 1);
+            const text = f.errors.length ? f.errors[0].text : '';
+            check('it fits the debug sidebar', text.length <= 1000, true);
+            check('it still starts at the top',
+                  /^Traceback \(most recent call last\):/.test(text), true);
+            check('and ends with the exception', /\nKeyError: 'missing'$/.test(text), true);
+            check('it carried the msg, so a Catch node fires',
+                  f.errors.length > 0 && f.errors[0].msg && f.errors[0].msg._msgid, 'test-1');
+
+            console.log('\nG. FORCE_COLOR in the environment — no escape codes in the entry');
+            /* NO_COLOR wins over FORCE_COLOR, so a shell that sets it would hide the bug. */
+            const noColor = process.env.NO_COLOR;
+            delete process.env.NO_COLOR;
+            process.env.FORCE_COLOR = '1';
+            scenario('if True:\nprint(1)\nreturn msg', function (g) {
+              delete process.env.FORCE_COLOR;
+              if (noColor !== undefined) process.env.NO_COLOR = noColor;
+              const text = g.errors.length ? g.errors[0].text : '';
+              check('it holds the IndentationError', /IndentationError/.test(text), true);
+              check('without ANSI escape codes', /\u001b\[/.test(text), false);
+              done();
+            });
+          });
         });
       });
     });

@@ -137,6 +137,12 @@ returning something JSON cannot hold.
   times. Each respawn ran the same code and failed the same way, so the same traceback landed in
   the sidebar eleven times. Python now says when its code has loaded; a process that dies before
   that is reported once and the node stops until the next deploy.
+- A report longer than the sidebar shows (`debugMaxLength`, 1000 characters by default) used to
+  lose its end — the exception line, the exit code and the stop notice, the lines a traceback is
+  read by. It now keeps its first line and as many whole frames from the bottom as fit, with a
+  marker where frames were cut; the uncut report goes to the Node-RED log. Still one entry.
+- Python 3.13+ colours its tracebacks when `FORCE_COLOR` is set, even into a pipe, and the sidebar
+  showed the escape codes as text. The interpreter is started with `PYTHON_COLORS=0`.
 
 ## Unchanged from upstream
 
@@ -189,7 +195,7 @@ point of them:
 |---|---|
 | `test/e2e_test.js` | drives the node against a stub Node-RED, with no Node-RED installed: a message in, `node.log` and the returned `msg` out, and a `flow.set` / `flow.get` round trip, which is where Python blocks waiting for an answer. It exercises the real spawn options and both directions of the IPC channel |
 | `test/catch_test.js` | which failures reach a Catch node: `node.error` with and without `msg`, a `raise`, and an error nobody raised on purpose — and that the interpreter survives the last two |
-| `test/debug_messages_test.js` | one failure is one entry in the debug sidebar: a crash outside the function (traceback and exit code together), a `raise`, a function that only writes to stderr, one that writes to it without pause, and code that cannot load |
+| `test/debug_messages_test.js` | one failure is one entry in the debug sidebar: a crash outside the function (traceback and exit code together, cut to fit the sidebar from the middle so its bottom line stays), a `raise`, one from deep in a call stack, a function that only writes to stderr, one that writes to it without pause, code that cannot load, and no colour codes under `FORCE_COLOR` |
 | `test/interpreter_test.js` | the interpreter lookup, and the two paths that used to throw when there was no interpreter — a message arriving and the flow stopping. Platform-independent, so a POSIX machine tests the Windows failure mode |
 | `test/channel_test.py` | the framing itself, read out of `lib/` rather than copied so it cannot drift. It forces the framed and unframed paths on, so a POSIX machine can test the Windows one — including a captured Windows frame, a payload whose length puts a newline inside the header, a frame split across reads, two frames in one write, and an impossible length |
 
