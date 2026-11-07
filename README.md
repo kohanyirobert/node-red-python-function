@@ -158,17 +158,32 @@ KeyError: 'missing' (line 3)
 ```
 TypeError: Object of type set is not JSON serializable
 when serializing dict item 'payload'
-
-Python Function process exited with code 1
 ```
 
 - The entry is the exception and where in the function it happened — `(line N)`, or
-  `(line N, col M)` for code that does not compile — then, if the interpreter died, the exit code
-  and any stop notice.
+  `(line N, col M)` for code that does not compile — and, if the interpreter died, how it ended.
 - The whole traceback goes to the Node-RED log, and to a Catch node as `msg.error.stack`.
 - The author's code is no longer pasted into the wrapper script. It is passed to Python as an
   argument and compiled as a file of its own, `Function node`, so a traceback reads
   `File "Function node", line 3, in down` and quotes the author's line.
+
+### 8 · A failure never stops the node; only code that cannot load does
+
+Upstream restarted a crashed interpreter ten times, then stopped the node with `Function '…' has
+failed more than 10 times. Fix it and deploy again`. The count never reset, so ten mistakes spread
+over a week stopped a node as surely as ten in a row. The built-in Function node has nothing like
+it: a thrown error kills nothing.
+
+- Returning something JSON cannot hold — a `set`, a `datetime`, `bytes` — is now an error like a
+  `raise`: one entry, catchable, and the interpreter stays up. It used to kill it. So does
+  `sys.exit()`, which used to end the interpreter without a word.
+- What still ends it is what Python cannot catch: `os._exit()`, a crash inside a C extension, or
+  something outside killing it. That is one entry — `Python Function process exited with code 3,
+  and was restarted`, or `was killed (SIGKILL)` — and a fresh interpreter, every time. There is
+  no limit, because there is no loop to break: a fresh interpreter only waits for the next
+  message, so it cannot crash again on its own.
+- Code that cannot load is the one case that stops the node until the next deploy (§6): a
+  respawn would run the same code and fail the same way, straight away.
 
 ## Unchanged from upstream
 
@@ -220,7 +235,7 @@ point of them:
 | | |
 |---|---|
 | `test/catch_test.js` | which failures reach a Catch node: `node.error` with and without `msg`, a `raise`, and an error nobody raised on purpose — and that the interpreter survives the last two |
-| `test/debug_messages_test.js` | one failure is one short entry in the debug sidebar, shaped like the built-in node's: a crash outside the function (the exception and the exit code, the traceback in the log), a `raise`, one from deep in a call stack (the line numbers are the editor's), a function that only writes to stderr, one that writes to it without pause, code that cannot load, and no colour codes under `FORCE_COLOR` |
+| `test/debug_messages_test.js` | one failure is one short entry in the debug sidebar, shaped like the built-in node's: a return value JSON cannot hold (an error like a raise, catchable, the traceback in the log), a `raise`, one from deep in a call stack (the line numbers are the editor's), a function that only writes to stderr, one that writes to it without pause, code that cannot load, no colour codes under `FORCE_COLOR`, and crashes Python cannot catch — twelve in a row, a kill from outside — each reported once and restarted, never stopping the node |
 | `test/interpreter_test.js` | the interpreter lookup, and the two paths that used to throw when there was no interpreter — a message arriving and the flow stopping. Platform-independent, so a POSIX machine tests the Windows failure mode |
 | `test/channel_test.py` | the framing itself, read out of `lib/` rather than copied so it cannot drift. It forces the framed and unframed paths on, so a POSIX machine can test the Windows one — including a captured Windows frame, a payload whose length puts a newline inside the header, a frame split across reads, two frames in one write, and an impossible length |
 

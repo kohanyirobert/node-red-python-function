@@ -61,7 +61,7 @@ function scenario(func, onSettle) {
   Ctor.call(node, {name: 'catch-test', func: func});
 
   const timer = setTimeout(function () {
-    try { node.child.kill(); } catch (e) { /* already gone */ }
+    try { node.handlers.close(); } catch (e) { /* already gone */ }
     onSettle(seen);
   }, 4500);
   timer.unref && timer.unref();

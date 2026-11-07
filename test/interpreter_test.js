@@ -64,7 +64,7 @@ console.log('\nAn interpreter that exists is found');
   check('a child was spawned', !!node.child, true);
   check('nothing was reported as an error', seen.errors.length, 0);
   checkMatch('the status says it is running', seen.status && seen.status.text, /Running/);
-  try { node.child.kill(); } catch (e) { /* already gone */ }
+  try { seen.handlers.close(); } catch (e) { /* already gone */ }
 }
 
 console.log('\nNo interpreter: reported on the node, and the runtime survives');

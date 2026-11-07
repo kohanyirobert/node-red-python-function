@@ -12,9 +12,10 @@
  * used to be the entry, and the sidebar keeps only the first 1000 characters of one, so a long
  * traceback lost its last line — the one that says what went wrong.
  *
- * Driven here: a return value that cannot be turned into JSON, which kills the interpreter; a
- * plain raise; a raise deep in a call stack; a function that merely writes to stderr and carries
- * on, one that writes to stderr without pause; and code that cannot even load.
+ * Driven here: a return value that cannot be turned into JSON; a plain raise; a raise deep in a
+ * call stack; a function that merely writes to stderr and carries on, one that writes to stderr
+ * without pause; code that cannot even load; and the crashes Python cannot catch, which restart
+ * the interpreter as often as they happen.
  */
 const assert = require('assert');
 
@@ -68,8 +69,6 @@ function scenario(func, onSettle) {
   function arm() {
     if (timer) return;
     timer = setTimeout(function () {
-      /* Stop the respawned interpreter, if any, before moving on. */
-      node.func.attempts = 0;
       try { node.handlers.close(); } catch (e) { /* already gone */ }
       onSettle(seen);
     }, SETTLE_MS);
@@ -111,6 +110,44 @@ function streaming(onSettle) {
   });
 }
 
+/* Feed `steps` one at a time, each once the interpreter is up and the one before has been
+ * answered (sent or reported): 'ok' and 'crash' are inputs, 'kill' kills the process from
+ * outside, 'exit' is an input that calls sys.exit(). Settles once the last has been answered. */
+function sequence(steps, onSettle) {
+  const seen = {errors: [], sent: [], status: null};
+  const node = {
+    handlers: {},
+    on: function (event, fn) { this.handlers[event] = fn; },
+    log: function () {}, warn: function () {},
+    status: function (s) { seen.status = s.text; },
+    error: function (err, msg) { seen.errors.push({text: String(err), msg: msg}); },
+    send: function (msgs) { seen.sent.push(Array.isArray(msgs) ? msgs[0] : msgs); },
+    context: function () { return {flow: contextStore(), global: contextStore()}; },
+  };
+  Ctor.call(node, {name: 'crash-test', func:
+    "import os, sys\nif msg['payload'] == 'crash':\n    os._exit(3)\n" +
+    "if msg['payload'] == 'exit':\n    sys.exit(0)\nreturn msg"});
+  let answered = 0;
+  let step = 0;
+  const poll = setInterval(function () {
+    if (seen.errors.length + seen.sent.length < answered) return;
+    if (!node.child.ready) return;
+    if (step === steps.length) {
+      clearInterval(poll);
+      node.handlers.close();
+      onSettle(seen);
+      return;
+    }
+    const what = steps[step++];
+    answered = seen.errors.length + seen.sent.length + 1;
+    if (what === 'kill') {
+      node.child.kill('SIGKILL');
+    } else {
+      node.handlers.input({payload: what, _msgid: `seq-${step}`});
+    }
+  }, 20);
+}
+
 const hardStop = setTimeout(function () {
   console.log('  FAIL  the scenarios never settled');
   process.exit(1);
@@ -123,21 +160,21 @@ function done() {
   process.exit(failed ? 1 : 0);
 }
 
-console.log('\nA. a failure outside the function, which ends the interpreter — one entry');
+console.log('\nA. a return value JSON cannot hold — an error like a raise, not a crash');
 scenario("return {'payload': {1, 2}}", function (a) {
   check('exactly one error was reported', a.errors.length, 1);
   const text = a.errors.length ? a.errors[0].text : '';
   /* The traceback for this one runs past 1000 characters, the most the sidebar shows. */
-  check('the entry is the exception, the data it failed on, and the exit — nothing else', text,
+  check('the entry is the exception and the data it failed on — nothing else', text,
         "TypeError: Object of type set is not JSON serializable\n" +
-        "when serializing dict item 'payload'\n\nPython Function process exited with code 1");
+        "when serializing dict item 'payload'");
   /* An Error, not a string: the sidebar then shows it as it shows a JavaScript error. */
   check('it is an error whose stack is the traceback',
         a.errors.length > 0 && /^Traceback[^]*TypeError/.test(a.errors[0].stack), true);
   check('the whole traceback went to the log',
         a.logs.some((l) => /^Traceback/.test(l) && /TypeError/.test(l)), true);
-  check('nothing to catch: no msg rode along, as before',
-        a.errors.length > 0 && a.errors[0].msg, undefined);
+  check('it carried the msg, so a Catch node fires',
+        a.errors.length > 0 && a.errors[0].msg && a.errors[0].msg._msgid, 'test-1');
 
   console.log('\nB. a raise in the function — one entry, and still catchable');
   scenario("raise ValueError('kaboom')", function (b) {
@@ -207,7 +244,22 @@ scenario("return {'payload': {1, 2}}", function (a) {
                     ' (line 2, col 1)');
               check('without ANSI escape codes, in the entry or the log',
                     /\u001b\[/.test(text + g.logs.join('')), false);
-              done();
+              console.log('\nH. crashes Python cannot catch — reported, and restarted every time');
+              const crashes = Array(12).fill('crash');
+              sequence(crashes.concat(['kill', 'exit', 'ok']), function (h) {
+                const texts = h.errors.map((e) => e.text);
+                check('each of 12 crashes in a row was one entry, and each restarted',
+                      texts.slice(0, 12).every((t) =>
+                        t === 'Python Function process exited with code 3, and was restarted'), true);
+                check('a kill from outside is reported and restarted too', texts[12],
+                      'Python Function process was killed (SIGKILL), and was restarted');
+                check('sys.exit() is an error, not a silent exit', texts[13], 'SystemExit: 0 (line 5)');
+                check('nothing else was reported', texts.length, 14);
+                check('and the node never stopped: the last message went through',
+                      h.sent.length === 1 && h.sent[0].payload, 'ok');
+                check('its status still says running', h.status, 'Running');
+                done();
+              });
             });
           });
         });

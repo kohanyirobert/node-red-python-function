@@ -100,8 +100,7 @@ check("EOF part-way through a header reads as EOF",
 check("EOF with nothing at all reads as EOF", reader(b"", True).readline(), b"")
 
 # A length that cannot be real means the channel is out of step with the framing. Without a
-# bound this asks read() for terabytes and the process dies with MemoryError, taking one of the
-# node's ten respawn attempts with it and explaining nothing.
+# bound this asks read() for terabytes and the process dies with MemoryError, explaining nothing.
 huge = (1).to_bytes(8, "little") + (2 ** 62).to_bytes(8, "little")
 try:
     reader(huge, True).readline()

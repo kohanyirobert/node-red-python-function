@@ -72,7 +72,7 @@ function finish() {
   if (finished) return;
   finished = true;
   clearTimeout(timer);
-  try { node.child.kill(); } catch (e) { /* already gone */ }
+  try { node.handlers.close(); } catch (e) { /* already gone */ }
 
   if (seen.spawnError) {
     console.log(`  FAIL  the interpreter could not be spawned: ${seen.spawnError}`);
