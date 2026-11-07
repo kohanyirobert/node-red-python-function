@@ -62,7 +62,7 @@ function scenario(func, onSettle) {
       arm();
     },
     status: function () {},
-    send: function (msgs) { seen.sent = Array.isArray(msgs) ? msgs[0] : msgs; arm(); },
+    send: function (msgs) { seen.sent = [].concat(msgs).flat()[0]; arm(); },
     context: function () { return {flow: contextStore(), global: contextStore()}; },
   };
 
@@ -121,7 +121,7 @@ function sequence(steps, onSettle) {
     log: function () {}, warn: function () {},
     status: function (s) { seen.status = s.text; },
     error: function (err, msg) { seen.errors.push({text: String(err), msg: msg}); },
-    send: function (msgs) { seen.sent.push(Array.isArray(msgs) ? msgs[0] : msgs); },
+    send: function (msgs) { seen.sent.push([].concat(msgs).flat()[0]); },
     context: function () { return {flow: contextStore(), global: contextStore()}; },
   };
   Ctor.call(node, {name: 'crash-test', func:
@@ -161,12 +161,12 @@ function done() {
 }
 
 console.log('\nA. a return value JSON cannot hold — an error like a raise, not a crash');
-scenario("return {'payload': {1, 2}}", function (a) {
+/* A date, a set or bytes are converted (see compat_test.js); an arbitrary object cannot be. */
+scenario("return {'payload': object()}", function (a) {
   check('exactly one error was reported', a.errors.length, 1);
   const text = a.errors.length ? a.errors[0].text : '';
-  /* The traceback for this one runs past 1000 characters, the most the sidebar shows. */
   check('the entry is the exception and the data it failed on — nothing else', text,
-        "TypeError: Object of type set is not JSON serializable\n" +
+        "TypeError: Object of type object is not JSON serializable\n" +
         "when serializing dict item 'payload'");
   /* An Error, not a string: the sidebar then shows it as it shows a JavaScript error. */
   check('it is an error whose stack is the traceback',
@@ -203,7 +203,9 @@ scenario("return {'payload': {1, 2}}", function (a) {
 
         console.log('\nE. code that cannot load — one entry, not one per respawn');
         scenario('x = = 1\nreturn msg', function (e) {
-          check('exactly one error was reported', e.errors.length, 1);
+          /* The test's message, sent before the code failed, is told the node is not running. */
+          check('the SyntaxError was reported once',
+                e.errors.filter((x) => /SyntaxError/.test(x.text)).length, 1);
           check('it is the SyntaxError, where it is, the exit, and what to do',
                 e.errors.length > 0 && e.errors[0].text,
                 'SyntaxError: invalid syntax (line 1, col 5)\n\n' +

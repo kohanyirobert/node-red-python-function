@@ -40,7 +40,7 @@ const node = {
   warn: function () {},
   error: function (msg) { failures.push(`node.error: ${String(msg).trim()}`); },
   status: function () {},
-  send: function (msgs) { seen.sent = Array.isArray(msgs) ? msgs[0] : msgs; finish(); },
+  send: function (msgs) { seen.sent = [].concat(msgs).flat()[0]; finish(); },
   context: function () { return {flow: flowCtx, global: globalCtx}; },
 };
 

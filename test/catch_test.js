@@ -54,7 +54,7 @@ function scenario(func, onSettle) {
       seen.errors.push({text: text, msg: msg});
     },
     status: function () {},
-    send: function (msgs) { seen.sent = Array.isArray(msgs) ? msgs[0] : msgs; },
+    send: function (msgs) { seen.sent = [].concat(msgs).flat()[0]; },
     context: function () { return {flow: contextStore(), global: contextStore()}; },
   };
 
