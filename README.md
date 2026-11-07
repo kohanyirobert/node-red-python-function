@@ -129,7 +129,7 @@ returning something JSON cannot hold.
   at least once a second, and in pieces of about 64 KB at most. The flip side: stderr written close
   together — by two messages in quick succession, or just before a crash — shares an entry.
   Trailing whitespace is trimmed, so stderr that is only whitespace is not reported.
-- When the interpreter dies, the exit code goes in the same entry as the traceback that killed it.
+- When the interpreter dies, the exit code goes in the same entry as the error that killed it.
   stderr that looks like a traceback waits up to 2 s for that exit rather than 200 ms, so a slow
   machine does not split them; the flip side is that a traceback a live function prints itself
   (`traceback.print_exc()`) shows up up to 2 s late.
@@ -137,11 +137,93 @@ returning something JSON cannot hold.
   times. Each respawn ran the same code and failed the same way, so the same traceback landed in
   the sidebar eleven times. Python now says when its code has loaded; a process that dies before
   that is reported once and the node stops until the next deploy.
+- Python 3.13+ colours its tracebacks when `FORCE_COLOR` is set, even into a pipe, and the sidebar
+  showed the escape codes as text. The interpreter is started with `PYTHON_COLORS=0`.
+
+### 7 · An error reads like the built-in node's: one line, and the line number in the editor
+
+After §6 a crash was one entry holding the whole traceback, and the sidebar shows only the first
+1000 characters of an entry (`debugMaxLength`). A long traceback — returning a `set`, a `datetime`
+or `bytes` gives one — lost its last line, the one that says what went wrong, along with the exit
+code and the notice that the node had stopped. And every line number pointed into the script the
+node wraps around the author's code: line 2 of the function was `line 178`.
+
+The built-in Function node shows a thrown error as one line, `TypeError: ...`, and keeps the stack
+for the Catch node. This node now does the same:
+
+```
+KeyError: 'missing' (line 3)
+```
+
+```
+TypeError: Object of type set is not JSON serializable
+when serializing dict item 'payload'
+```
+
+- The entry is the exception and where in the function it happened — `(line N)`, or
+  `(line N, col M)` for code that does not compile — and, if the interpreter died, how it ended.
+- The whole traceback goes to the Node-RED log, and to a Catch node as `msg.error.stack`.
+- The author's code is no longer pasted into the wrapper script. It is passed to Python as an
+  argument and compiled as a file of its own, `Function node`, so a traceback reads
+  `File "Function node", line 3, in down` and quotes the author's line.
+
+### 8 · A failure never stops the node; only code that cannot load does
+
+Upstream restarted a crashed interpreter ten times, then stopped the node with `Function '…' has
+failed more than 10 times. Fix it and deploy again`. The count never reset, so ten mistakes spread
+over a week stopped a node as surely as ten in a row. The built-in Function node has nothing like
+it: a thrown error kills nothing.
+
+- Returning something JSON cannot hold is now an error like a `raise`: one entry, catchable, and
+  the interpreter stays up. It used to kill it. (A `datetime`, a `set` and `bytes` are no longer
+  among them: §9 converts them.) So does `sys.exit()`, which used to end the interpreter without
+  a word.
+- What still ends it is what Python cannot catch: `os._exit()`, a crash inside a C extension, or
+  something outside killing it. That is one entry — `Python Function process exited with code 3,
+  and was restarted`, or `was killed (SIGKILL)` — and a fresh interpreter, every time. There is
+  no limit, because there is no loop to break: a fresh interpreter only waits for the next
+  message, so it cannot crash again on its own.
+- Code that cannot load is the one case that stops the node until the next deploy (§6): a
+  respawn would run the same code and fail the same way, straight away.
+
+### 9 · Everything else the JavaScript Function node does
+
+Matched pair by pair against the built-in node on Node-RED 4.1.17 — a throw, a runtime error,
+`node.error` with and without `msg`, `node.warn`, `node.status`, a non-message return, `None`, two
+outputs, several messages on one output, `node.send` twice, flow context, `env.get`,
+`node.name` — each reaching the same debug, Catch and Complete nodes the same way. Only the
+language shows: `ValueError` rather than `Error`, and a line number on every error.
+
+- **A Complete node fires.** The runtime passes each input a `done` callback; upstream never
+  called it. Now a message is done when the function returns, and done with the error when it
+  raised, which is how the runtime hands it to a Catch node.
+- **The message is the message.** In JavaScript the function changes the message object itself,
+  so a Complete or Catch node sees the changes; Python works on a copy, so the copy comes back and
+  the original is made to match it.
+- **Values JSON cannot hold.** A Buffer arrives as `bytes`. On the way out `bytes` become a
+  Buffer, a `datetime` / `date` / `time` its ISO 8601 string (what a JavaScript `Date` becomes in
+  JSON), a `set` a list and a `Decimal` a number. They used to be an error.
+- **Each message gets its own `req` / `res`.** The live objects of an `http in` node were kept on
+  the node, one pair at a time, and put on whatever came out next — so with two requests in flight
+  the first reply went to the second client. They are now tied to the message, and put back
+  wherever Python returns them. Messages that share a `_msgid` (split from one) no longer get
+  mixed up either: Python gets a number per input.
+- **`env.get(name)`, `node.id`, `node.name`, `node.path`, `node.outputCount`** — as in
+  JavaScript.
+- **On Start and On Stop tabs**, beside On Message, and a **timeout** under Setup. On Start runs
+  once before the first message; unlike JavaScript its imports and variables are there for On
+  Message, since Python has no module setup of its own. On Stop runs when the node stops. A
+  message that runs past the timeout fails with `Script execution timed out after …ms`; Python
+  cannot be interrupted from outside, so its process is replaced, and the messages behind it go
+  on. `globalFunctionTimeout` in settings.js applies too.
+- **A crash fails the message it happened on** — a Catch node can take it — and messages queued
+  behind it go to the fresh interpreter instead of dying with the old one.
+- A non-message return is reported in the JavaScript node's words: `Function tried to send a
+  message of type number`.
 
 ## Unchanged from upstream
 
-Multiple outputs, `node.send` / `log` / `warn` / `error` / `status`, and the restoration of the live
-`req` / `res` objects onto the outgoing message all work as they did.
+Multiple outputs and `node.send` / `log` / `warn` / `error` / `status` work as they did.
 
 ## Install
 
@@ -187,9 +269,9 @@ point of them:
 
 | | |
 |---|---|
-| `test/e2e_test.js` | drives the node against a stub Node-RED, with no Node-RED installed: a message in, `node.log` and the returned `msg` out, and a `flow.set` / `flow.get` round trip, which is where Python blocks waiting for an answer. It exercises the real spawn options and both directions of the IPC channel |
 | `test/catch_test.js` | which failures reach a Catch node: `node.error` with and without `msg`, a `raise`, and an error nobody raised on purpose — and that the interpreter survives the last two |
-| `test/debug_messages_test.js` | one failure is one entry in the debug sidebar: a crash outside the function (traceback and exit code together), a `raise`, a function that only writes to stderr, one that writes to it without pause, and code that cannot load |
+| `test/debug_messages_test.js` | one failure is one short entry in the debug sidebar, shaped like the built-in node's: a return value JSON cannot hold (an error like a raise, catchable, the traceback in the log), a `raise`, one from deep in a call stack (the line numbers are the editor's), a function that only writes to stderr, one that writes to it without pause, code that cannot load, no colour codes under `FORCE_COLOR`, and crashes Python cannot catch — twelve in a row, a kill from outside — each reported once and restarted, never stopping the node |
+| `test/compat_test.js` | what a flow can tell apart from the JavaScript node: `done()` once per message, with the error when it failed; a date, a set and bytes out and a Buffer in; each of two messages in flight getting its own live `req` / `res`, though they share a `_msgid`; `env.get` and `node.id` / `name` / `path` / `outputCount`; On Start and On Stop, and an error in On Start; a timeout; a crash failing its own message while the one queued behind it goes on; the wording of a non-message return; and the message that came in holding the function's changes |
 | `test/interpreter_test.js` | the interpreter lookup, and the two paths that used to throw when there was no interpreter — a message arriving and the flow stopping. Platform-independent, so a POSIX machine tests the Windows failure mode |
 | `test/channel_test.py` | the framing itself, read out of `lib/` rather than copied so it cannot drift. It forces the framed and unframed paths on, so a POSIX machine can test the Windows one — including a captured Windows frame, a payload whose length puts a newline inside the header, a frame split across reads, two frames in one write, and an impossible length |
 

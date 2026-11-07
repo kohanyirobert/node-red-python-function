@@ -54,14 +54,14 @@ function scenario(func, onSettle) {
       seen.errors.push({text: text, msg: msg});
     },
     status: function () {},
-    send: function (msgs) { seen.sent = Array.isArray(msgs) ? msgs[0] : msgs; },
+    send: function (msgs) { seen.sent = [].concat(msgs).flat()[0]; },
     context: function () { return {flow: contextStore(), global: contextStore()}; },
   };
 
   Ctor.call(node, {name: 'catch-test', func: func});
 
   const timer = setTimeout(function () {
-    try { node.child.kill(); } catch (e) { /* already gone */ }
+    try { node.handlers.close(); } catch (e) { /* already gone */ }
     onSettle(seen);
   }, 4500);
   timer.unref && timer.unref();

@@ -1,148 +1,224 @@
 <script type="text/javascript">
-    RED.nodes.registerType('node-red-python-function',{
-        category: 'function',
-        color: '#fdd0a2',
-        defaults: {
-            name: {value: ""},
-            func: {value: "\nreturn msg"},
-            outputs: {value: 1}  // Ofuscated way to persist the number of outputs of the node
-        },
-        inputs: 1,
-        outputs: 1,
-        icon: "function.png",
-        // The type is the package name so it is unmistakably unique and so an "unknown node type"
-        // message names the thing to install. Neither of those is a reason to show it on the
-        // canvas, hence an explicit short label for both the palette and unnamed nodes.
-        paletteLabel: "python function",
-        label: function() {
-            return this.name || "python function";
-        },
-        oneditprepare: function() {
-            $( "#node-input-outputs" ).spinner({
-                min:1
-            });
-            // Ask Node-RED for an editor instead of calling the `ace` global. Upstream did
-            // `ace.edit(...)` directly, which only worked because Node-RED used to load ACE on
-            // every page. Node-RED 5 loads just the library settings.js selects — Monaco by
-            // default — so there `ace` is undefined, oneditprepare threw, and the dialog opened
-            // with an empty box where the code should be. createEditor returns whichever editor
-            // the runtime has (Monaco, ACE or the basic textarea) behind one interface, and it
-            // has been there since Node-RED 0.x. Node-RED maps 'ace/mode/python' to Monaco's
-            // Python itself.
-            this.editor = RED.editor.createEditor({
-                id: 'node-input-func-editor',
-                mode: 'ace/mode/python',
-                value: $("#node-input-func").val(),
-                focus: true
-            });
-            // ACE only: offer the Node-RED names as completions. Monaco has no `completers`
-            // and its word-based suggestions cover the same ground.
-            if (this.editor.completers) {
-                var noderedKeywords = [
-                    'msg', 'msg.payload', 'node', 'node.send',
-                    'node.log', 'node.warn', 'node.error', 'node.status'
-                ];
-                this.editor.completers.push({
-                    getCompletions: function (state, session, pos, prefix, callback) {
-                        callback(null, noderedKeywords.map(function (word) {
-                            return {
-                                name: word,
-                                value: word,
-                                score: 0,
-                                meta: 'Node-RED'
-                            };
-                        }));
+    (function () {
+        // The three code tabs, laid out as the JavaScript Function node lays out its own:
+        // On Start, On Message, On Stop.
+        var EDITORS = [
+            {tab: 'func-tab-init', field: 'initialize', editor: 'initEditor', label: 'On Start'},
+            {tab: 'func-tab-body', field: 'func', editor: 'editor', label: 'On Message'},
+            {tab: 'func-tab-finalize', field: 'finalize', editor: 'finalizeEditor', label: 'On Stop'}
+        ];
+
+        RED.nodes.registerType('node-red-python-function', {
+            category: 'function',
+            color: '#fdd0a2',
+            defaults: {
+                name: {value: ""},
+                func: {value: "\nreturn msg"},
+                outputs: {value: 1},  // Ofuscated way to persist the number of outputs of the node
+                timeout: {value: 0},
+                initialize: {value: ""},
+                finalize: {value: ""}
+            },
+            inputs: 1,
+            outputs: 1,
+            icon: "function.png",
+            // The type is the package name so it is unmistakably unique and so an "unknown node type"
+            // message names the thing to install. Neither of those is a reason to show it on the
+            // canvas, hence an explicit short label for both the palette and unnamed nodes.
+            paletteLabel: "python function",
+            label: function() {
+                return this.name || "python function";
+            },
+            oneditprepare: function() {
+                var that = this;
+                var tabs = RED.tabs.create({
+                    id: "func-tabs",
+                    onchange: function(tab) {
+                        $("#func-tabs-content").children().hide();
+                        $("#" + tab.id).show();
+                        RED.tray.resize();
                     }
                 });
+                tabs.addTab({id: "func-tab-config", iconClass: "fa fa-cog", label: "Setup"});
+                EDITORS.forEach(function (e) {
+                    tabs.addTab({id: e.tab, label: e.label});
+                });
+                tabs.activateTab("func-tab-body");
+
+                $("#node-input-outputs").spinner({min: 1});
+                // Seconds; 0 is no timeout, as in the JavaScript node.
+                $("#node-input-timeout").spinner({min: 0});
+
+                // Ask Node-RED for an editor instead of calling the `ace` global. Upstream did
+                // `ace.edit(...)` directly, which only worked because Node-RED used to load ACE on
+                // every page. Node-RED 5 loads just the library settings.js selects — Monaco by
+                // default — so there `ace` is undefined, oneditprepare threw, and the dialog opened
+                // with an empty box where the code should be. createEditor returns whichever editor
+                // the runtime has (Monaco, ACE or the basic textarea) behind one interface, and it
+                // has been there since Node-RED 0.x. Node-RED maps 'ace/mode/python' to Monaco's
+                // Python itself.
+                EDITORS.forEach(function (e) {
+                    that[e.editor] = RED.editor.createEditor({
+                        id: 'node-input-' + e.field + '-editor',
+                        mode: 'ace/mode/python',
+                        value: $("#node-input-" + e.field).val(),
+                        focus: e.field === 'func'
+                    });
+                });
+                // ACE only: offer the Node-RED names as completions. Monaco has no `completers`
+                // and its word-based suggestions cover the same ground.
+                var noderedKeywords = [
+                    'msg', "msg['payload']", 'node', 'node.send', 'node.log', 'node.warn',
+                    'node.error', 'node.status', 'node.id', 'node.name', 'node.path',
+                    'node.outputCount', 'env.get', 'flow.get', 'flow.set', 'global_ctx.get',
+                    'global_ctx.set'
+                ];
+                EDITORS.forEach(function (e) {
+                    if (that[e.editor].completers) {
+                        that[e.editor].completers.push({
+                            getCompletions: function (state, session, pos, prefix, callback) {
+                                callback(null, noderedKeywords.map(function (word) {
+                                    return {name: word, value: word, score: 0, meta: 'Node-RED'};
+                                }));
+                            }
+                        });
+                    }
+                });
+            },
+            oneditsave: function() {
+                var that = this;
+                var noerr = 0;
+                EDITORS.forEach(function (e) {
+                    var editor = that[e.editor];
+                    var annot = editor.getSession().getAnnotations();
+                    for (var k = 0; k < annot.length; k++) {
+                        if (annot[k].type === "error") {
+                            noerr += 1;
+                        }
+                    }
+                    $("#node-input-" + e.field).val(editor.getValue());
+                    editor.destroy();
+                    delete that[e.editor];
+                });
+                $("#node-input-noerr").val(noerr);
+                this.noerr = noerr;
+            },
+            oneditcancel: function() {
+                var that = this;
+                EDITORS.forEach(function (e) {
+                    that[e.editor].destroy();
+                    delete that[e.editor];
+                });
+            },
+            oneditresize: function(size) {
+                var that = this;
+                EDITORS.forEach(function (e) {
+                    $("#node-input-" + e.field + "-editor").css("height", (size.height - 83) + "px");
+                    that[e.editor].resize();
+                });
             }
-        },
-        oneditsave: function() {
-            var annot = this.editor.getSession().getAnnotations();
-            this.noerr = 0;
-            $("#node-input-noerr").val(0);
-            for (var k=0; k < annot.length; k++) {
-                if (annot[k].type === "error") {
-                    $("#node-input-noerr").val(annot.length);
-                    this.noerr = annot.length;
-                }
-            }
-            $("#node-input-func").val(this.editor.getValue());
-            this.editor.destroy();
-            delete this.editor;
-        },
-        oneditcancel: function() {
-            this.editor.destroy();
-            delete this.editor;
-        },
-        oneditresize: function(size) {
-            var rows = $("#dialog-form>div:not(.node-text-editor-row)");
-            var height = $("#dialog-form").height();
-            // jQuery 3 removed .size(); Node-RED has shipped jQuery 3 since 1.x.
-            for (var i=0;i<rows.length;i++) {
-                height -= $(rows[i]).outerHeight(true);
-            }
-            var editorRow = $("#dialog-form>div.node-text-editor-row");
-            height -= (parseInt(editorRow.css("marginTop"))+parseInt(editorRow.css("marginBottom")));
-            $(".node-text-editor").css("height",height+"px");
-            this.editor.resize();
-        }
-    });
+        });
+    })();
 </script>
 
 <script type="text/x-red" data-template-name="node-red-python-function">
     <div class="form-row">
         <label for="node-input-name"><i class="fa fa-tag"></i> <span>Name</span></label>
         <input type="text" id="node-input-name" placeholder="Name">
-    </div>
-    <div class="form-row" style="margin-bottom: 0px;">
-        <label for="node-input-func"><i class="fa fa-wrench"></i> <span>Function</span></label>
-        <input type="hidden" id="node-input-func" autofocus="autofocus">
+        <input type="hidden" id="node-input-func">
+        <input type="hidden" id="node-input-initialize">
+        <input type="hidden" id="node-input-finalize">
         <input type="hidden" id="node-input-noerr">
     </div>
-    <div class="form-row node-text-editor-row">
-        <div style="height: 250px; min-height:150px;" class="node-text-editor" id="node-input-func-editor" ></div>
+    <div class="form-row" style="margin-bottom: 0;">
+        <ul style="min-width: 600px; margin-bottom: 20px;" id="func-tabs"></ul>
     </div>
-    <div class="form-row">
-        <label for="node-input-outputs"><i class="fa fa-random"></i> <span>Outputs</span></label>
-        <input id="node-input-outputs" style="width: 60px;" value="1">
+    <div id="func-tabs-content" style="min-height: calc(100% - 95px);">
+        <div id="func-tab-config" style="display:none">
+            <div class="form-row" style="display: inline-block; margin-right: 50px;">
+                <label for="node-input-outputs"><i class="fa fa-random"></i> <span>Outputs</span></label>
+                <input id="node-input-outputs" style="width: 60px;" value="1">
+            </div>
+            <div class="form-row" style="display: inline-block;">
+                <label for="node-input-timeout"><i class="fa fa-clock-o"></i> <span>Timeout</span></label>
+                <input id="node-input-timeout" style="width: 60px;" placeholder="seconds">
+            </div>
+        </div>
+        <div id="func-tab-init" style="display:none">
+            <div class="form-row node-text-editor-row">
+                <div style="height: 250px; min-height:150px;" class="node-text-editor" id="node-input-initialize-editor"></div>
+            </div>
+        </div>
+        <div id="func-tab-body" style="display:none">
+            <div class="form-row node-text-editor-row">
+                <div style="height: 220px; min-height:150px;" class="node-text-editor" id="node-input-func-editor"></div>
+            </div>
+        </div>
+        <div id="func-tab-finalize" style="display:none">
+            <div class="form-row node-text-editor-row">
+                <div style="height: 250px; min-height:150px;" class="node-text-editor" id="node-input-finalize-editor"></div>
+            </div>
+        </div>
     </div>
-    <div class="form-tips"><span>See the Info tab for help writing Python functions</span></div>
 </script>
 
 <script type="text/x-red" data-help-name="node-red-python-function">
-    <p>Just like the plain old Javascript function node, but writting Python!</p>
-    <p>All functionality of the javascript function node is to be expected (now or in the near future, or in a parallel universe)</p>
-    <p>Virtually all posible incoming messages are supported, available as a Python dictionary. However bear in mind that all data inside msg that is not a valid JSON data type will be dropped from it permanently</p>
-    <p><pre>THIS IS NOT READY FOR PRODUCTION YET!</pre></p>
+    <p>A Function node, in Python. It behaves like the built-in JavaScript Function node:
+       the same tabs, the same way of sending messages, and errors reach a Catch node the same way.</p>
 
-    <h2>Usage</h2>
-    <p>A function block where you can write code to do more interesting things.</p>
-    <p>The message is passed in as a Python dictionary called <code>msg</code>.</p>
-    <p>By convention it will have a <code>msg['payload']</code> key containing
-       the body of the message.</p>
-    <h4>Logging and Error Handling</h4>
-    <p>To log any information, or report an error, the following functions are available:</p>
-        <ul>
-            <li><code>node.log("Log")</code></li>
-            <li><code>node.warn("Warning")</code></li>
-            <li><code>node.error("Error")</code></li>
-        </ul>
-    </p>
-    <p>The Catch node can also be used to handle errors. To invoke a Catch node,
-    pass <code>msg</code> as a second argument to <code>node.error</code>:</p>
-    <pre>node.error("Error msg", msg)</pre>
-    <h4>Sending messages</h4>
-    <p>The function can either return the messages it wants to pass on to the next nodes
-    in the flow, or can call <code>node.send(messages)</code>.</p>
-    <p>It can return/send:</p>
+    <h3>Tabs</h3>
+    <dl class="message-properties">
+        <dt>Setup</dt>
+        <dd>The number of outputs, and a timeout in seconds (0 for none). A message that runs
+            longer fails with <code>Script execution timed out after …ms</code>; the messages
+            behind it carry on.</dd>
+        <dt>On Start</dt>
+        <dd>Runs once, before the first message. Imports and variables made here are there for
+            On Message — this is where <code>import</code>s go.</dd>
+        <dt>On Message</dt>
+        <dd>Runs for each message, which is a dictionary called <code>msg</code>, with the
+            body in <code>msg['payload']</code>.</dd>
+        <dt>On Stop</dt>
+        <dd>Runs when the node stops or is redeployed.</dd>
+    </dl>
+
+    <h3>Sending messages</h3>
+    <p>Return the messages to pass on, or call <code>node.send(messages)</code>. Either can be:</p>
     <ul>
-      <li>a single message dictionary - passed to nodes connected to the first output</li>
-      <li>a list of message dictionaries - passed to nodes connected to the corresponding outputs</li>
+        <li>a message dictionary — sent to the first output</li>
+        <li>a list of them — one for each output, in order</li>
     </ul>
-    <p>If any element of the list is itself a list of messages, multiple
-          messages are sent to the corresponding output.</p>
-    <p>If null is returned, either by itself or as an element of the list, no
-          message is passed on.</p>
-    <p>See the <a target="_new" href="http://nodered.org/docs/writing-functions.html">online documentation</a> for more help.</p>
+    <p>If an element of the list is itself a list, all of its messages go to that output.
+       <code>None</code>, alone or in the list, sends nothing there.</p>
+    <p>Messages travel to and from Python as JSON. A Buffer arrives as <code>bytes</code>;
+       on the way out, <code>bytes</code> become a Buffer, a <code>datetime</code>,
+       <code>date</code> or <code>time</code> its ISO 8601 string, a <code>set</code> a list
+       and a <code>Decimal</code> a number. Anything else JSON cannot hold is an error.
+       The live <code>msg['req']</code> and <code>msg['res']</code> of an http in node are put
+       back on the way out.</p>
 
+    <h3>What the code can use</h3>
+    <ul>
+        <li><code>node.log(…)</code>, <code>node.warn(…)</code>, <code>node.error(…)</code>,
+            <code>node.status({...})</code>, <code>node.send(…)</code></li>
+        <li><code>node.id</code>, <code>node.name</code>, <code>node.path</code>,
+            <code>node.outputCount</code></li>
+        <li><code>flow.get(key)</code> / <code>flow.set(key, value)</code>, and the same on
+            <code>global_ctx</code> (<code>global</code> is a reserved word in Python)</li>
+        <li><code>env.get(name)</code> — environment variables, as in the JavaScript node</li>
+    </ul>
+
+    <h3>Errors</h3>
+    <p>An exception the code does not catch is reported as one line in the debug sidebar —
+       the exception and the line it happened on, such as <code>KeyError: 'nope' (line 2)</code>
+       — and reaches a Catch node, with the traceback in <code>msg.error.stack</code>. The whole
+       traceback is also in the Node-RED log.</p>
+    <p><code>node.error("text")</code> only reaches the sidebar; <code>node.error("text", msg)</code>
+       reaches a Catch node too.</p>
+    <p>A Complete node fires for every message once the code has returned.</p>
+    <p>If the Python process itself dies, the message it was on fails and the process is
+       restarted. Code that cannot load stops the node until it is fixed and deployed again.</p>
+
+    <p>See the <a target="_new" href="https://nodered.org/docs/user-guide/writing-functions">Node-RED documentation</a>
+       on writing functions.</p>
 </script>
