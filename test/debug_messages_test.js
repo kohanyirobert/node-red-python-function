@@ -131,6 +131,9 @@ scenario("return {'payload': {1, 2}}", function (a) {
   check('the entry is the exception, the data it failed on, and the exit — nothing else', text,
         "TypeError: Object of type set is not JSON serializable\n" +
         "when serializing dict item 'payload'\n\nPython Function process exited with code 1");
+  /* An Error, not a string: the sidebar then shows it as it shows a JavaScript error. */
+  check('it is an error whose stack is the traceback',
+        a.errors.length > 0 && /^Traceback[^]*TypeError/.test(a.errors[0].stack), true);
   check('the whole traceback went to the log',
         a.logs.some((l) => /^Traceback/.test(l) && /TypeError/.test(l)), true);
   check('nothing to catch: no msg rode along, as before',
@@ -169,6 +172,9 @@ scenario("return {'payload': {1, 2}}", function (a) {
                 'SyntaxError: invalid syntax (line 1, col 5)\n\n' +
                 "Python Function process exited with code 1\n\n" +
                 "Function 'debug-test' could not start. Fix it and deploy again");
+          check('as an error whose stack is the SyntaxError',
+                e.errors.length > 0 && /File "Function node", line 1[^]*SyntaxError/.test(
+                  e.errors[0].stack), true);
 
           console.log('\nF. a raise from deep in a call stack — one short entry, own line numbers');
           /* Two functions in turn: Python folds a frame repeated in a row into one
